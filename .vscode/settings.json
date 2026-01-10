@@ -1,0 +1,4 @@
+{
+  "python.pythonPath": ".\\venc\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true
+}
