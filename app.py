@@ -45,14 +45,24 @@ def home():
 
 @app.route("/api/analyze", methods=["POST"])
 def analyze_coin():
-    """Triggers the full Live Data -> Risk Engine -> ML Pipeline"""
+    """
+    Triggers the full Live Data -> Risk Engine -> ML Pipeline
+    Supports Time Horizon: { "ticker": "BTC-USD", "period": "1y" }
+    """
     data = request.get_json()
     ticker = data.get("ticker", "").upper()
+    
+    # Time Horizon: '1mo', '3mo', '6mo', '1y', '2y', '5y'
+    period = data.get("period", "1y") 
+    
     if not ticker: return jsonify({"error": "No ticker provided"}), 400
 
-    print(f"--- Analyzing {ticker} ---")
-    if live_data.fetch_and_clean(ticker):
+    print(f"--- Analyzing {ticker} over {period} ---")
+    
+    # We pass the period to the fetcher so it gets the right amount of history
+    if live_data.fetch_and_clean(ticker, period=period):
         result = risk_engine.run_analysis(ticker)
+        result['Time_Horizon'] = period  # Tag the result with the horizon
         return jsonify({"success": True, "data": result})
     
     return jsonify({"error": "Fetch failed"}), 500
@@ -62,7 +72,7 @@ def get_metrics():
     """Returns the Risk Leaderboard"""
     df = load_risk_data()
     return jsonify(df.to_dict(orient="records"))
-    
+
 @app.route("/api/stress-test", methods=["GET", "POST"])
 def stress_test():
     """
@@ -115,5 +125,23 @@ def get_correlation():
         return jsonify(matrix.to_dict())
     return jsonify({"error": "Not enough data"}), 404
 
+@app.route("/api/history", methods=["POST"])
+def get_price_history():
+    """
+    (Optional Graph) Returns raw price history for a line chart.
+    Payload: { "ticker": "BTC-USD" }
+    """
+    data = request.get_json()
+    ticker = data.get("ticker", "").upper()
+    filename = f"cleaned_{ticker.replace('-','_')}_daily_data.csv"
+    
+    if os.path.exists(filename):
+        df = pd.read_csv(filename)
+        # Return only Date and Close price for the chart
+        chart_data = df[['Date', 'Close']].to_dict(orient='records')
+        return jsonify(chart_data)
+        
+    return jsonify({"error": "Data not found"}), 404
+    
 if __name__ == "__main__":
     app.run(debug=True, port=5000)

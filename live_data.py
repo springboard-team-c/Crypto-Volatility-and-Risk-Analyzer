@@ -2,21 +2,22 @@ import yfinance as yf
 import pandas as pd
 import os
 
-def fetch_and_clean(ticker):
+def fetch_and_clean(ticker, period="1y"): 
     """
     Fetches data for a SINGLE ticker, cleans it, and saves/returns it.
+    Now supports dynamic time horizons (e.g., '1mo', '1y', '5y').
     """
-    print(f"--- Fetching data for {ticker} ---")
+    print(f"--- Fetching data for {ticker} (Period: {period}) ---")
     try:
-        # Fetch 1 year of data
-        data = yf.download(ticker, period="1y", interval="1d")
+        # Fetch data using the dynamic period requested by the user
+        data = yf.download(ticker, period=period, interval="1d")
         
         if data.empty:
             return None
         
         # Handling MultiIndex if yfinance returns it
         if isinstance(data.columns, pd.MultiIndex):
-             # flattened columns
+            # Flatten columns
             data.columns = data.columns.droplevel(1) 
             
         data = data.reset_index()
