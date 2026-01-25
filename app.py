@@ -1,53 +1,119 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 import pandas as pd
+import glob
+import os
+import live_data   
+import risk_engine 
 
 app = Flask(__name__)
+CORS(app)
 
-# ================== LOAD FINAL TEAM OUTPUT ==================
-CSV_FILE = "crypto_risk_scored.csv"
+# ================== HELPER FUNCTIONS ==================
+def load_risk_data():
+    if os.path.exists("crypto_risk_scored.csv"):
+        return pd.read_csv("crypto_risk_scored.csv")
+    return pd.DataFrame()
 
-def load_data():
-    df = pd.read_csv(CSV_FILE)
-    return df
+def build_correlation_matrix():
+    """Reads all CSVs and calculates how assets move together (PDF Page 12)"""
+    files = glob.glob("cleaned_*_daily_data.csv")
+    if not files: return None
+    
+    combined_df = pd.DataFrame()
+    
+    for file in files:
+        ticker = file.replace("cleaned_", "").replace("_daily_data.csv", "").replace("_", "-")
+        df = pd.read_csv(file)
+        df['Date'] = pd.to_datetime(df['Date'])
+        df.set_index('Date', inplace=True)
+        
+        # We only care about Close price for correlation
+        combined_df[ticker] = df['Close']
+    
+    # Calculate Correlation Matrix (Returns values between -1 and 1)
+    return combined_df.pct_change().corr()
 
-# ================== ENDPOINTS ==================
+# ================== API ENDPOINTS ==================
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
-        "message": "Crypto Volatility and Risk Analyzer Backend is running",
-        "status": "All endpoints are connected successfully",
-         "available_endpoints": {
-            "Health Check": "/health",
-            "All Metrics": "/metrics",
-            "Asset Metrics": "/metrics?asset=BTC",
-            "Asset Risk": "/asset-risk?asset=ETH"
-        }
+        "status": "Backend Active (100% Completed)", 
+        "endpoints": ["/api/analyze", "/api/metrics", "/api/stress-test", "/api/correlation"]
     })
 
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({
-        "status": "OK",
-        "message": "Backend health check successful"
-    })
+@app.route("/api/analyze", methods=["POST"])
+def analyze_coin():
+    """Triggers the full Live Data -> Risk Engine -> ML Pipeline"""
+    data = request.get_json()
+    ticker = data.get("ticker", "").upper()
+    if not ticker: return jsonify({"error": "No ticker provided"}), 400
 
-@app.route("/metrics", methods=["GET"])
-def metrics():
-    df = load_data()
+    print(f"--- Analyzing {ticker} ---")
+    if live_data.fetch_and_clean(ticker):
+        result = risk_engine.run_analysis(ticker)
+        return jsonify({"success": True, "data": result})
+    
+    return jsonify({"error": "Fetch failed"}), 500
+
+@app.route("/api/metrics", methods=["GET"])
+def get_metrics():
+    """Returns the Risk Leaderboard"""
+    df = load_risk_data()
     return jsonify(df.to_dict(orient="records"))
+    
+@app.route("/api/stress-test", methods=["GET", "POST"])
+def stress_test():
+    """
+    (PDF Page 13) Simulates portfolio crash.
+    Supports POST (JSON) and GET (Browser defaults).
+    """
+    # 1. Handle Input (GET or POST)
+    if request.method == "POST":
+        data = request.get_json()
+    else:
+        # If accessing via Browser (GET), use defaults or URL params
+        data = {
+            "investment": request.args.get("investment", 1000),
+            "drop_percentage": request.args.get("drop_percentage", 0.20)
+        }
+        
+    investment = float(data.get("investment", 1000))
+    drop = float(data.get("drop_percentage", 0.20))
+    
+    # 2. Run Simulation
+    df = load_risk_data()
+    if df.empty:
+        return jsonify({"error": "No data found. Run /api/analyze first."}), 404
 
-@app.route("/asset-risk", methods=["GET"])
-def asset_risk():
-    df = load_data()
-    return jsonify(dict(zip(df["Asset"], df["Risk_Category"])))
+    results = []
+    
+    for _, row in df.iterrows():
+        # High Volatility assets (Cluster 2) suffer 1.5x more in a crash
+        multiplier = 1.5 if row.get('Cluster_Group') == 2 else 1.0
+        
+        actual_loss_pct = drop * multiplier
+        loss_amount = investment * actual_loss_pct
+        
+        results.append({
+            "Asset": row['Asset'],
+            "Scenario_Drop": f"{drop*100}%",
+            "Projected_Loss": round(loss_amount, 2),
+            "Remaining_Value": round(investment - loss_amount, 2),
+            "Risk_Multiplier": multiplier
+        })
+    
+    return jsonify(results)
 
-@app.route("/risk-score", methods=["GET"])
-def risk_score():
-    df = load_data()
-    return jsonify(dict(zip(df["Asset"], df["Risk_Score"])))
+@app.route("/api/correlation", methods=["GET"])
+def get_correlation():
+    """(PDF Page 12) Returns the correlation matrix as JSON"""
+    matrix = build_correlation_matrix()
+    if matrix is not None:
+        # Convert to a format suitable for Heatmaps (JSON)
+        return jsonify(matrix.to_dict())
+    return jsonify({"error": "Not enough data"}), 404
 
-# ================== RUN ==================
 if __name__ == "__main__":
-    print("Backend running | All endpoints connected")
-    app.run(debug=True)
+    app.run(debug=True, port=5000)
