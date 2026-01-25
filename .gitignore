@@ -1,0 +1,14 @@
+# Ignore Data Files (Generated dynamically)
+*.csv
+
+# Ignore Python System Files
+__pycache__/
+*.pyc
+
+# Ignore Virtual Environments
+venc/
+env/
+venv/
+
+# Ignore VS Code Settings (Optional, but recommended for teams)
+.vscode/
