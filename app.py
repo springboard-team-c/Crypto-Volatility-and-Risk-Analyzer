@@ -43,29 +43,39 @@ def home():
         "endpoints": ["/api/analyze", "/api/metrics", "/api/stress-test", "/api/correlation"]
     })
 
-@app.route("/api/analyze", methods=["POST"])
+@app.route("/api/analyze", methods=["POST", "GET"])
 def analyze_coin():
     """
     Triggers the full Live Data -> Risk Engine -> ML Pipeline
-    Supports Time Horizon: { "ticker": "BTC-USD", "period": "1y" }
+    Supports Browser Testing: /api/analyze?ticker=BTC-USD
     """
-    data = request.get_json()
+    # 1. Handle Input: Support both JSON (Frontend) and URL Params (Browser)
+    if request.method == "POST":
+        data = request.get_json()
+    else:
+        # If accessing via Browser (GET), get data from the URL query
+        data = request.args 
+
+    # 2. Extract Data (Defaults if missing)
     ticker = data.get("ticker", "").upper()
-    
-    # Time Horizon: '1mo', '3mo', '6mo', '1y', '2y', '5y'
     period = data.get("period", "1y") 
     
-    if not ticker: return jsonify({"error": "No ticker provided"}), 400
+    # 3. Validation
+    if not ticker: 
+        return jsonify({
+            "error": "Missing ticker. Try adding ?ticker=BTC-USD to the URL.",
+            "usage_example": "/api/analyze?ticker=ETH-USD&period=6mo"
+        }), 400
 
     print(f"--- Analyzing {ticker} over {period} ---")
     
-    # We pass the period to the fetcher so it gets the right amount of history
+    # 4. Execution
     if live_data.fetch_and_clean(ticker, period=period):
         result = risk_engine.run_analysis(ticker)
-        result['Time_Horizon'] = period  # Tag the result with the horizon
+        result['Time_Horizon'] = period
         return jsonify({"success": True, "data": result})
     
-    return jsonify({"error": "Fetch failed"}), 500
+    return jsonify({"error": "Fetch failed or invalid ticker"}), 500
 
 @app.route("/api/metrics", methods=["GET"])
 def get_metrics():

@@ -14,18 +14,21 @@ def calculate_single_metrics(file_path):
         df = df.dropna()
         
         # --- 1. CORE METRICS ---
-        volatility = df['Daily_Return'].std() * np.sqrt(365) # Annualized Volatility
+        # Annualized Volatility (Standard Deviation * sqrt(365))
+        volatility = df['Daily_Return'].std() * np.sqrt(365)
         
+        # Max Drawdown (Peak to Trough)
         cumulative = (1 + df['Daily_Return']).cumprod()
         peak = cumulative.cummax()
         drawdown = (cumulative - peak) / peak
-        max_drawdown = drawdown.min() # Max Drawdown
+        max_drawdown = drawdown.min()
         
-        var_95 = np.percentile(df['Daily_Return'], 5) # Value at Risk (95%)
+        # Value at Risk (95% Confidence)
+        var_95 = np.percentile(df['Daily_Return'], 5)
         
-        # --- 2. RISK-ADJUSTED METRICS (NEW) ---
+        # --- 2. RISK-ADJUSTED METRICS ---
         # Sharpe Ratio: (Return - RiskFree) / Volatility
-        # We assume Risk Free rate is ~4% (0.04)
+        # We assume a standard Risk Free rate of ~4% (0.04)
         avg_annual_return = df['Daily_Return'].mean() * 365
         risk_free_rate = 0.04 
         sharpe_ratio = (avg_annual_return - risk_free_rate) / volatility if volatility != 0 else 0
@@ -34,16 +37,13 @@ def calculate_single_metrics(file_path):
         
     except Exception as e:
         print(f"Error calculating metrics for {file_path}: {e}")
+        # BUG FIX: Must return 5 values to match the unpack expectation below
         return 0, 0, 0, 0, 0
 
 def run_analysis(target_ticker):
     """
-    1. Loads baseline data.
-    2. Loads target ticker data.
-    3. Runs ML Clustering on the combined set.
-    4. Returns the specific stats for the target ticker.
+    Runs the full Risk Pipeline: Data Load -> Math -> Clustering -> Narrative
     """
-    # Identify the target file
     target_file = f"cleaned_{target_ticker.replace('-','_')}_daily_data.csv"
     
     # Gather all available CSVs (Baseline + The New One)
@@ -51,12 +51,13 @@ def run_analysis(target_ticker):
     
     results = []
     
-    # Calculate metrics for ALL coins (to build the cluster map)
     for file in all_files:
         asset_name = file.replace("cleaned_", "").replace("_daily_data.csv", "").replace("_", "-")
+        
+        # Unpack the 5 metrics calculated above
         vol, dd, var, sharpe, ret = calculate_single_metrics(file)
         
-        # Score Logic
+        # Score Logic (Weighted Average)
         score = (vol * 30) + (abs(dd) * 40) + (abs(var) * 100 * 5)
         risk_score = min(score, 100)
         
@@ -65,57 +66,57 @@ def run_analysis(target_ticker):
             "Volatility_Ann": round(vol, 4),
             "Max_Drawdown": round(dd, 4),
             "VaR_95": round(var, 4),
-            "Sharpe_Ratio": round(sharpe, 2),        # <--- NEW METRIC
-            "Annual_Return": round(ret, 2),          # <--- CONTEXT
+            "Sharpe_Ratio": round(sharpe, 2),
+            "Annual_Return": round(ret, 2),
             "Risk_Score": round(risk_score, 2)
         })
 
     df = pd.DataFrame(results)
     
     # --- ML CLUSTERING ---
-    # We need at least 3 coins to form clusters. 
+    # We need at least 3 coins to form meaningful clusters
     if len(df) >= 3:
-        # We now include Sharpe Ratio in the clustering logic (Smarter grouping)
         features = df[['Volatility_Ann', 'Max_Drawdown', 'Sharpe_Ratio']]
         kmeans = KMeans(n_clusters=3, random_state=42)
         df['Cluster_Group'] = kmeans.fit_predict(features)
     else:
         df['Cluster_Group'] = 0
 
-    # Logic: Math to English (INSIGHTS EXPLANATION ENGINE)
+  # ==============================================================================
+    #  THE "BEGINNER-FRIENDLY" NARRATIVE ENGINE (Markdown Version)
+    # ==============================================================================
     def interpret(row):
         insights = []
         
-        # 1. THE VERDICT (The "What")
+        # 1. THE VERDICT (The Headline)
         if row['Risk_Score'] > 75:
-            insights.append(f"<b>VERDICT: HIGH RISK.</b> This coin is highly speculative and unstable.")
+            insights.append(f"**VERDICT: HIGH RISK.** This asset is highly speculative.")
         elif row['Risk_Score'] > 40:
-            insights.append(f"<b>VERDICT: BALANCED.</b> This coin shows a mix of stability and growth potential.")
+            insights.append(f"**VERDICT: BALANCED.** This asset shows moderate stability.")
         else:
-            insights.append(f"<b>VERDICT: CONSERVATIVE.</b> This is one of the safest assets in the crypto market.")
+            insights.append(f"**VERDICT: CONSERVATIVE.** This is a relatively safe asset.")
 
-        # 2. VOLATILITY EXPLANATION (The "Why")
+        # 2. SHARPE RATIO (Efficiency)
+        sharpe = row['Sharpe_Ratio']
+        if sharpe > 1.5:
+             insights.append(f"**Sharpe Ratio ({sharpe}):** This metric tells you if the returns are worth the risk. A high score (>1.5) like this means you are getting excellent returns for every unit of risk you take.")
+        elif sharpe > 0:
+             insights.append(f"**Sharpe Ratio ({sharpe}):** This metric tells you if the returns are worth the risk. This score is decent, meaning you are being fairly compensated for the volatility.")
+        else:
+             insights.append(f"**Sharpe Ratio ({sharpe}):** This metric compares return vs. risk. A negative score means the asset is currently underperforming—you are taking risk but losing money.")
+
+        # 3. VOLATILITY (The Jitters)
         vol_pct = row['Volatility_Ann'] * 100
         if row['Volatility_Ann'] > 1.0:
-            insights.append(f"It is experiencing wild price swings ({vol_pct:.0f}% annualized). Be prepared for the price to double or crash within weeks.")
-        elif row['Volatility_Ann'] > 0.5:
-             insights.append(f"The price moves significantly ({vol_pct:.0f}% annualized), offering good trading opportunities but higher risk.")
+            insights.append(f"**Annual Volatility ({vol_pct:.0f}%):** This measures how violently the price moves. This is extremely high, meaning the price could double or crash in a very short time.")
         else:
-             insights.append(f"It is relatively calm compared to other cryptos, making it suitable for steady holding.")
+             insights.append(f"**Annual Volatility ({vol_pct:.0f}%):** This measures price stability. This asset is relatively calm compared to the rest of the crypto market.")
 
-        # 3. CRASH HISTORY (The Warning)
+        # 4. DRAWDOWN (The Worst Case)
         drawdown_pct = abs(row['Max_Drawdown']) * 100
-        if row['Max_Drawdown'] < -0.70:
-            insights.append(f"<b>Caution:</b> It has a history of crashing hard, having lost {drawdown_pct:.0f}% of its value in the past. Only invest what you can afford to lose.")
-        elif row['Max_Drawdown'] > -0.30:
-            insights.append("It has proven resilient, recovering well even during market dips.")
-
-        # 4. SHARPE RATIO CONTEXT (Risk-Adjusted Return)
-        if row['Sharpe_Ratio'] > 1.5:
-             insights.append(f"<b>Good News:</b> It has an excellent Sharpe Ratio ({row['Sharpe_Ratio']}), meaning you are getting high returns for the risk you take.")
-        elif row['Sharpe_Ratio'] < 0:
-             insights.append(f"<b>Note:</b> The risk-adjusted performance is poor (Sharpe: {row['Sharpe_Ratio']}); it is currently losing money relative to its volatility.")
-
+        if row['Max_Drawdown'] < -0.50:
+            insights.append(f"**Max Drawdown (-{drawdown_pct:.0f}%):** This shows the biggest crash this asset has ever suffered. A drop this large indicates it has collapsed before, so invest carefully.")
+        
         return " ".join(insights)
 
     df['Risk_Category'] = df.apply(interpret, axis=1)
