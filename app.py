@@ -86,14 +86,13 @@ def get_metrics():
 @app.route("/api/stress-test", methods=["GET", "POST"])
 def stress_test():
     """
-    (PDF Page 13) Simulates portfolio crash.
-    Supports POST (JSON) and GET (Browser defaults).
+    Simulates portfolio crash.
+    SMARTER LOGIC: Dynamically finds the 'Risky Cluster' based on Volatility.
     """
-    # 1. Handle Input (GET or POST)
+    # 1. Handle Input
     if request.method == "POST":
         data = request.get_json()
     else:
-        # If accessing via Browser (GET), use defaults or URL params
         data = {
             "investment": request.args.get("investment", 1000),
             "drop_percentage": request.args.get("drop_percentage", 0.20)
@@ -102,26 +101,44 @@ def stress_test():
     investment = float(data.get("investment", 1000))
     drop = float(data.get("drop_percentage", 0.20))
     
-    # 2. Run Simulation
+    # 2. Load Data
     df = load_risk_data()
     if df.empty:
         return jsonify({"error": "No data found. Run /api/analyze first."}), 404
 
     results = []
     
+    # --- DYNAMIC RISK DETECTION ---
+    # We don't assume risky is "Cluster 2" anymore.
+    # Instead, we ASK: "Which cluster has the highest average volatility?"
+    risky_cluster_id = -1
+    
+    if 'Cluster_Group' in df.columns and df['Cluster_Group'].nunique() > 1:
+        # Calculate mean volatility for each cluster
+        cluster_stats = df.groupby('Cluster_Group')['Volatility_Ann'].mean()
+        # The cluster ID with the highest volatility is the "Risky" one
+        risky_cluster_id = cluster_stats.idxmax()
+        print(f"--- Stress Test Info: Identified Cluster {risky_cluster_id} as High Risk ---")
+
     for _, row in df.iterrows():
-        # High Volatility assets (Cluster 2) suffer 1.5x more in a crash
-        multiplier = 1.5 if row.get('Cluster_Group') == 2 else 1.0
+        # LOGIC:
+        # If the coin is in the Risky Cluster -> 1.5x Multiplier
+        # OR if its Risk Score is very high (>80) -> 1.5x Multiplier (Safety check)
+        
+        is_risky_cluster = (row.get('Cluster_Group') == risky_cluster_id)
+        is_high_score = (row.get('Risk_Score', 0) > 80)
+        
+        multiplier = 1.5 if (is_risky_cluster or is_high_score) else 1.0
         
         actual_loss_pct = drop * multiplier
         loss_amount = investment * actual_loss_pct
         
         results.append({
             "Asset": row['Asset'],
-            "Scenario_Drop": f"{drop*100}%",
+            "Scenario_Drop": f"{drop*100:.0f}%", # e.g. "20%"
+            "Risk_Multiplier": f"{multiplier}x",   # e.g. "1.5x"
             "Projected_Loss": round(loss_amount, 2),
-            "Remaining_Value": round(investment - loss_amount, 2),
-            "Risk_Multiplier": multiplier
+            "Remaining_Value": round(investment - loss_amount, 2)
         })
     
     return jsonify(results)
